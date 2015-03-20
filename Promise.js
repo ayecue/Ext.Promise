@@ -2,78 +2,155 @@
  * @class Ext.Promise
  */
 Ext.define('Ext.Promise',{
-    statics : {
-        ERROR_FIRED : 'Error: Promise already fired.',
+    config: {
         STATE_THEN : true,
         STATE_FAILURE : false,
         STATE_ALWAYS : null
     },
-    constructor : function(){
-		var me = this;
 
-        me.id = Ext.id();
-		me.callbacks = [];
-	},
+    inheritableStatics: {
+        all: function(){
+            var args = Ext.toArray(arguments),
+                size = args.length,
+                dfd = this.create(),
+                internalCallback = function(){
+                    var finished = true,
+                        state = true;
+
+                    Ext.Array.each(args,function(item){
+                        if (!item.fired) {
+                            finished = false;
+                        } else if (item.state !== true) {
+                            state = false;
+                        }
+
+                        return finished;
+                    });
+
+                    if (finished) {
+                        dfd.fire(state);
+                    }
+                };
+
+            Ext.Array.each(args,function(item){
+                item.always(internalCallback);
+            });
+
+            return dfd;
+        },
+
+        afterWaitFor: function(after,callback){
+            var dfd = this.create();
+
+            after.always(function(){
+                callback.apply(this,arguments).always(function(){
+                    dfd.resolve(this,arguments);
+                });
+            });
+
+            return dfd; 
+        }
+    },
+
+    privates: {
+        run: function(){
+            var me = this;
+
+            if (me.fired === false) {
+                return;
+            }
+
+            var callbacks = me.callbacks,
+                state = me.state,
+                scope = me.scope,
+                args = Ext.Array.from(me.args),
+                stateAlways = me.getConfig('STATE_ALWAYS');
+
+            for (var call; (call = callbacks.shift());) {
+                if (call.state === state || call.state === stateAlways) {
+                    call.fn.apply(call.scope || scope,args);
+                }
+            }
+        }
+    },
+
+    constructor : function(config){
+        var me = this;
+
+        Ext.applyIf(me,{
+            id: Ext.id(),
+            callbacks: [],
+            fired: false,
+            state: null,
+            scope: null,
+            args: null
+        });
+
+        me.initConfig(config);
+    },
+
     /**
      * Register callbacks for different states. 
      * All states are possible but to keep it simple I added three standart methods: then, failure and always.
      */
-    then : function(fn){
-        return this.after(fn,this.self.STATE_THEN);
+    then: function(fn,scope){
+        return this.after(fn,scope,this.getConfig('STATE_THEN'));
     },
-    failure : function(fn){
-        return this.after(fn,this.self.STATE_FAILURE);
+
+    failure: function(fn,scope){
+        return this.after(fn,scope,this.getConfig('STATE_FAILURE'));
     },
-    always : function(fn){
-        return this.after(fn,this.self.STATE_ALWAYS);
+
+    always: function(fn,scope){
+        return this.after(fn,scope,this.getConfig('STATE_ALWAYS'));
     },
-	after : function(fn,state){
-		var me = this,
+
+    after: function(fn,scope,state){
+        var me = this,
             callbacks = me.callbacks;
-        
-        if (!callbacks) {
-            throw new Error(me.self.ERROR_FIRED);
-        }
         
         callbacks.push({
             state : state,
+            scope: scope,
             fn : fn
         });
+        me.run();
         
         return me;
-	},
-    /**
-     * Resolve all callbacks of a certain state.
-     * Same thing like above. Basicly all states are possible but to keep it simple I added two standart methods: resolve and reject
-     */
-    delayed : function(delay,state,scope,args){
+    },
+
+    delayed: function(delay,state,scope,args){
         Ext.defer(function(){
             this.fire(state,scope,args);
         },delay,this);
     },
-    resolve : function(scope,args){
-        this.fire(this.self.STATE_THEN,scope,args);
+
+    resolve: function(scope,args){
+        this.fire(this.getConfig('STATE_THEN'),scope,args);
     },
-    reject : function(scope,args){
-        this.fire(this.self.STATE_FAILURE,scope,args);
+
+    reject: function(scope,args){
+        this.fire(this.getConfig('STATE_FAILURE'),scope,args);
     },
-    fire : function(state,scope,args) {
-        var me = this,
-            callbacks = me.callbacks;
+
+    fire: function(state,scope,args) {
+        var me = this;
         
-        if (!callbacks) {
-            throw new Error(me.self.ERROR_FIRED);
+        if (me.fired === true) {
+            Ext.log({
+                level: 'warn'
+            },me.getConfig('ERROR_FIRED'));
         }
+
+        me.fired = true;
+        me.state = state;
+        me.scope = scope;
+        me.args = args;
         
-        args = Ext.Array.from(args);
-        
-        for (var call; (call = callbacks.shift()) != null;) {
-            if (call.state === state || call.state == me.self.STATE_ALWAYS) {
-                call.fn.apply(scope,args);
-            }
-        }
-        
-        me.callbacks = null;
-        delete me.callbacks;
+        me.run();
+    },
+
+    reset: function(){
+        this.fired = false;
     }
 });
